@@ -6,6 +6,7 @@
 ;; Maintainer: Michael Heerdegen <michael_heerdegen@web.de>
 ;; Created: Dec 29 2012
 ;; Keywords: convenience
+;; Homepage: https://github.com/michael-heerdegen/interaction-log.el
 ;; Version: 1.0
 
 ;; Compatibility: GNU Emacs 24
