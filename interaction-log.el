@@ -1,4 +1,4 @@
-;;; interaction-log.el --- exhaustive log of interactions with Emacs -*- lexical-binding: t -*-
+;;; interaction-log.el --- exhaustive log of interactions with Emacs
 
 ;; Copyright (C) 2012-2013 Michael Heerdegen
 
@@ -8,8 +8,6 @@
 ;; Keywords: convenience
 ;; Homepage: https://github.com/michael-heerdegen/interaction-log.el
 ;; Version: 1.0
-
-;; Compatibility: GNU Emacs 24
 
 ;; This file is not part of GNU Emacs.
 
@@ -75,15 +73,30 @@
   :prefix "ilog-"
   :group 'convenience)
 
-(defface ilog-non-change-face '((t (:inherit success)))
+(defface ilog-non-change-face
+  '((default :weight bold)
+    (((class color) (min-colors 16) (background light)) :foreground "ForestGreen")
+    (((class color) (min-colors 88) (background dark))  :foreground "Green1")
+    (((class color) (min-colors 16) (background dark))  :foreground "Green")
+    (((class color)) :foreground "green")) ; i.e. "success" in Emacs 24
   "Face for keys that didn't cause buffer changes."
   :group 'interaction-log)
 
-(defface ilog-change-face '((t (:inherit warning)))
+(defface ilog-change-face
+  '((default :weight bold)
+    (((class color) (min-colors 16)) :foreground "DarkOrange")
+    (((class color)) :foreground "yellow")) ; i.e. "warning" in Emacs 24
   "Face for keys that caused buffer changes."
   :group 'interaction-log)
 
-(defface ilog-echo-face '((t (:inherit error)))
+(defface ilog-echo-face
+  '((default :weight bold)
+    (((class color) (min-colors 88) (background light)) :foreground "Red1")
+    (((class color) (min-colors 88) (background dark))  :foreground "Pink")
+    (((class color) (min-colors 16) (background light)) :foreground "Red1")
+    (((class color) (min-colors 16) (background dark))  :foreground "Pink")
+    (((class color) (min-colors 8)) :foreground "red")
+    (t :inverse-video t))	; i.e. "error" in Emacs 24
   "Face for keys that caused text being displayed in the echo area."
   :group 'interaction-log)
 
@@ -164,10 +177,13 @@ Logged stuff goes to the *Emacs Log* buffer."
 
 ;;; Helper funs
 
+(defstruct ilog-log-entry
+  keys command buffer-name (pre-messages "") (post-messages "") changed-buffer-p loads)
+
 (defun ilog-log-file-load (file)
   "Annotate a file load in `ilog-temp-load-hist'."
   (when ilog-recent-commands
-    (callf concat (nth 4 (car ilog-recent-commands))
+    (callf concat (ilog-log-entry-post-messages (car ilog-recent-commands))
       (ilog-get-last-messages)
       (propertize
        (concat (if load-file-name
@@ -217,34 +233,41 @@ in *Messages* since the last call of this function."
 
 (defun ilog-entering-password-p ()
   "Whether the user is currently entering a password."
-  (eq (current-local-map) read-passwd-map))
+  (and
+   (boundp 'read-passwd-map)
+   (keymapp read-passwd-map)
+   (eq read-passwd-map (current-local-map))))
 
 (defun ilog-record-this-command ()
   "Push info about the current command to `ilog-recent-commands'."
-  (push (list (if (ilog-entering-password-p) [??] ;hide passwords!
-                (apply #'vector
-                       (mapcar
-                        (lambda (key) (if (consp key) ;; (mouse-... event-data)
-                                     (car key)
-                                   key))
-                        (this-command-keys-vector))))
-              (if (ilog-entering-password-p) "(entering-password)" this-command)
-              (buffer-name)
-              (ilog-get-last-messages)
-              ""
-              nil nil)
-        ilog-recent-commands)
+  (push
+   (make-ilog-log-entry
+    :keys (if (ilog-entering-password-p) [??] ;hide passwords!
+	    (apply #'vector
+		   (mapcar
+		    (lambda (key) (if (consp key) ;; (mouse-... event-data)
+				 (car key)
+			       key))
+		    (this-command-keys-vector))))
+    :command (cond
+	      ((ilog-entering-password-p) "(entering-password)")
+	      ((not (symbolp this-command)) "(anonymous command)")
+	      (t this-command))
+    :buffer-name (buffer-name)
+    :pre-messages (ilog-get-last-messages))   
+   ilog-recent-commands)
   (setq ilog-temp-load-hist nil))
 
 (defun ilog-post-command ()
   "DTRT after a command was executed.
 Goes to `post-command-hook'."
   (when ilog-recent-commands
-    (callf concat (nth 4 (car ilog-recent-commands)) (ilog-get-last-messages))
-    (setf (nth 5 (car ilog-recent-commands)) ilog-last-command-changed-buffer-p)
+    (callf concat (ilog-log-entry-post-messages (car ilog-recent-commands)) (ilog-get-last-messages))
+    (setf (ilog-log-entry-changed-buffer-p (car ilog-recent-commands))
+	  ilog-last-command-changed-buffer-p)
     (setq ilog-last-command-changed-buffer-p nil)
     ;; handle load-tree
-    (setf (nth 6 (car ilog-recent-commands)) (ilog-parse-load-tree))
+    (setf (ilog-log-entry-loads (car ilog-recent-commands)) (ilog-parse-load-tree))
     (setq ilog-temp-load-hist nil)))
 
 (defun ilog-update-log-buffer ()
@@ -273,17 +296,23 @@ Goes to `post-command-hook'."
         (save-excursion
           (goto-char (point-max))
           (dolist (entry (nreverse ilog-recent-commands))
-            (destructuring-bind (key cmd buf pre-mes post-mes chg load-levels) entry
+            (let ((keys        (ilog-log-entry-keys             entry))
+		  (command     (ilog-log-entry-command          entry))
+		  (buf         (ilog-log-entry-buffer-name      entry))
+		  (pre-mess    (ilog-log-entry-pre-messages     entry))
+		  (post-mess   (ilog-log-entry-post-messages    entry))
+		  (changedp    (ilog-log-entry-changed-buffer-p entry))
+		  (load-levels (ilog-log-entry-loads            entry)))
               (insert (if (looking-back "\\`\\|\n") "" "\n")
-                      (ilog-format-messages pre-mes)
-                      (propertize (key-description key)
-                                  'face (case chg
+                      (ilog-format-messages pre-mess)
+                      (propertize (key-description keys)
+                                  'face (case changedp
                                           ((t)    'ilog-change-face)
                                           ((echo) 'ilog-echo-face)
                                           (t      'ilog-non-change-face)))
-                      " " (format "%s" cmd) " " (format "\"%s\"" buf)
-                      (if post-mes "\n")
-                      (ilog-format-messages post-mes load-levels))
+                      " " (format "%s" command) " " (format "\"%s\"" buf)
+                      (if post-mess "\n")
+                      (ilog-format-messages post-mess load-levels))
               (deactivate-mark t)))
           (setq ilog-recent-commands ())))
       (when ilog-tail-mode
