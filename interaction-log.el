@@ -1,5 +1,6 @@
 ;;; interaction-log.el --- exhaustive log of interactions with Emacs
 
+
 ;; Copyright (C) 2012-2013 Michael Heerdegen
 
 ;; Author: Michael Heerdegen <michael_heerdegen@web.de>
@@ -7,7 +8,8 @@
 ;; Created: Dec 29 2012
 ;; Keywords: convenience
 ;; Homepage: https://github.com/michael-heerdegen/interaction-log.el
-;; Version: 1.0
+;; Version: 1.1
+
 
 ;; This file is not part of GNU Emacs.
 
@@ -44,6 +46,11 @@
 ;;;
 ;;; (global-set-key [f1] (lambda () (interactive) (display-buffer ilog-buffer-name)))
 ;;;
+;;; Alternatively, there is a command `ilog-show-in-new-frame' that
+;;; you can use to display the log buffer in a little new frame whose
+;;; parameters can be controlled by customizing
+;;; `ilog-new-frame-parameters'.
+;;;
 ;;; Usage: Use `interaction-log-mode' to toggle logging.  Enabling the
 ;;; mode will cause all messages and all pressed keys (along with the
 ;;; actually executed command and the according buffer) to be logged
@@ -58,13 +65,13 @@
 ;;; tell me!
 
 
-;;; Change Log:
-
 ;;; Code:
 
 (eval-when-compile (require 'cl))
 (require 'timer)
 (require 'font-lock)
+(require 'easymenu)
+
 
 ;;; Customizable stuff
 
@@ -100,6 +107,11 @@
   "Face for keys that caused text being displayed in the echo area."
   :group 'interaction-log)
 
+(defface ilog-buffer-face
+  '((((class color) (min-colors 88)) :foreground "DarkBlue")
+    (t :weight bold))
+  "Face for buffer names.")
+
 (defface ilog-load-face '((t (:inherit 'font-lock-string-face)))
   "Face for lines describing file loads."
   :group 'interaction-log)
@@ -116,11 +128,62 @@ more stuff is added.
 When nil, the cursor will stay at the same text position."
   :group 'interaction-log :type 'boolean)
 
-(defcustom ilog-log-max 1000
+(defcustom ilog-log-max t
   "Maximum number of lines to keep in the *Emacs Log* buffer.
-If t, don't truncate the buffer when it becomes large"
+If t, don't truncate the buffer when it becomes large."
   :group 'interaction-log :type '(choice (const  :tag "Unlimited" t)
                                          (number :tag "lines")))
+
+(defcustom ilog-idle-time .1
+  "Refresh log every this many seconds idle time."
+  :group 'interaction-log :type 'number)
+
+(defcustom ilog-initially-show-buffers nil
+  "Whether to show buffer names initially.
+You can also toggle displaying buffer names in the log buffer by
+typing \\<ilog-log-buffer-mode-map>\\[ilog-toggle-display-buffer-names]."
+  :group 'interaction-log :type 'boolean)
+
+(defvar ilog-log-buffer-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map [?t] #'ilog-toggle-view)
+    (define-key map [?b] #'ilog-toggle-display-buffer-names)
+    map)
+  "Keymap for `ilog-log-buffer-mode'.")
+
+(defcustom interaction-log-mode-hook '()
+  "Hook run when entering `interaction-log-mode'."
+  :group 'interaction-log :type 'hook)
+
+(defcustom ilog-log-buffer-mode-hook '()
+  "Hook run when entering `ilog-log-buffer-mode'."
+  :group 'interaction-log :type 'hook)
+
+(defcustom ilog-new-frame-parameters
+  '((menu-bar-lines .         0)
+    (vertical-scroll-bars . nil)
+    (border-width .           0)
+    (left-fringe  .           0)
+    (right-fringe .           1)
+    (left         .       (- 0))
+    (width        .          35)
+    (height       .          20)
+    (font         .      "6x10"))
+  "Alist of frame parameters for `ilog-show-in-new-frame'.
+These parameters are applied to the new frame."
+  :group 'interaction-log
+  :type '(repeat (cons :format "%v"
+		       (symbol :tag "Parameter")
+		       (sexp :tag "Value"))))
+
+
+;;; Other stuff
+
+(easy-menu-define ilog-minor-mode-menu ilog-log-buffer-mode-map
+  "Menu used when `ilog-log-buffer-mode' is active."
+  '("Log"
+    ["Toggle view"           ilog-toggle-view]
+    ["Toggle buffer names"   ilog-toggle-display-buffer-names]))
 
 
 ;;; Internal Variables
@@ -149,7 +212,12 @@ Bound to t  when adding to the log buffer.")
 (defvar ilog-insertion-timer nil)
 
 (defvar ilog-temp-load-hist nil
-  "Holding file loads not-yet processed by us.")
+  "Holding file loads not-yet processed.")
+
+(defvar ilog-display-state nil)
+
+(defvar ilog-eob-wins '())
+
 
 ;;; User commands
 
@@ -159,14 +227,17 @@ Logged stuff goes to the *Emacs Log* buffer."
   :group 'interaction-log
   :lighter nil
   :global t
+  :after-hook interaction-log-mode-hook
   (if interaction-log-mode
       (progn
         (add-hook 'after-change-functions #'ilog-note-buffer-change)
         (add-hook 'pre-command-hook       #'ilog-record-this-command)
         (add-hook 'post-command-hook      #'ilog-post-command)
         (setq ilog-truncation-timer (run-at-time 30 30 #'ilog-truncate-log-buffer))
-        (setq ilog-insertion-timer (run-with-idle-timer .3 .3 #'ilog-update-log-buffer))
-        (message "Interaction Log: started logging in %s" ilog-buffer-name))
+        (setq ilog-insertion-timer (run-with-timer ilog-idle-time ilog-idle-time
+						   #'ilog-timer-function))
+        (message "Interaction Log: started logging in %s" ilog-buffer-name)
+	(easy-menu-add ilog-minor-mode-menu))
     (remove-hook 'after-change-functions #'ilog-note-buffer-change)
     (remove-hook 'pre-command-hook       #'ilog-record-this-command)
     (remove-hook 'post-command-hook      #'ilog-post-command)
@@ -175,7 +246,86 @@ Logged stuff goes to the *Emacs Log* buffer."
     (when (timerp ilog-insertion-timer) (cancel-timer ilog-insertion-timer))
     (setq ilog-insertion-timer nil)))
 
+(defun ilog-toggle-view ()
+  "Toggle between different view states.
+Toggle successively between showing only messages, only
+commands, only file loads, and everything."
+  (interactive)
+  (ilog-log-buf-current-or-barf)
+  (case ilog-display-state
+    ((nil)
+     (add-to-invisibility-spec 'ilog-command)
+     (add-to-invisibility-spec 'ilog-buffer)
+     (add-to-invisibility-spec 'ilog-load)
+     (setq ilog-display-state 'messages)
+     (message "Showing only messages"))
+   ((messages)
+    (remove-from-invisibility-spec 'ilog-command)
+    (when ilog-initially-show-buffers
+      (remove-from-invisibility-spec 'ilog-buffer))
+    (add-to-invisibility-spec 'ilog-message)
+    (setq ilog-display-state 'commands)
+    (message "Showing only commands"))
+   ((commands)
+    (remove-from-invisibility-spec 'ilog-load)
+    (add-to-invisibility-spec 'ilog-command)
+    (add-to-invisibility-spec 'ilog-buffer)
+    (add-to-invisibility-spec 'ilog-message)
+    (setq ilog-display-state 'loads)
+    (message "Showing only file loads"))
+   ((loads)
+    (remove-from-invisibility-spec 'ilog-load)
+    (remove-from-invisibility-spec 'ilog-command)
+    (when ilog-initially-show-buffers
+      (remove-from-invisibility-spec 'ilog-buffer))
+    (remove-from-invisibility-spec 'ilog-message)
+    (setq ilog-display-state nil)
+    (message "Showing everything"))))
+
+(defun ilog-toggle-display-buffer-names ()
+  "Toggle display of buffers in log buffer."
+  (interactive)
+  (ilog-log-buf-current-or-barf)
+  (unless (memq 'ilog-command buffer-invisibility-spec)
+    (if (memq 'ilog-buffer buffer-invisibility-spec)
+	(remove-from-invisibility-spec 'ilog-buffer)
+      (add-to-invisibility-spec 'ilog-buffer))))
+
+(defun ilog-show-in-new-frame ()
+  "Display log in a pop up frame.
+Customize `ilog-new-frame-parameters' to specify parameters of
+the newly created frame."
+  (interactive)
+  (unless interaction-log-mode (interaction-log-mode +1))
+  (let ((after-make-frame-functions
+	 (list (lambda (f)
+		 (run-with-idle-timer
+		  0 nil
+		  (lambda (f)
+		    (let ((win (frame-selected-window f)))
+		      (push win ilog-eob-wins)
+		      (set-window-dedicated-p win t)))
+		  f)))))
+    (display-buffer-pop-up-frame
+     ilog-buffer-name
+     `((pop-up-frame-parameters . ,ilog-new-frame-parameters)))))
+
+
 ;;; Helper funs
+
+(defun ilog-log-buf-current-or-barf ()
+  "Barf if the ilog log buffer is not current."
+  (unless (eq (current-buffer) (get-buffer ilog-buffer-name))
+    (error "You can use this command in %s only" ilog-buffer-name)))
+
+(define-minor-mode ilog-log-buffer-mode
+  "Minor mode for the ilog log buffer.
+
+Key bindings:
+
+\\{ilog-log-buffer-mode-map}"
+  :keymap ilog-log-buffer-mode-map
+  :after-hook ilog-log-buffer-mode-hook)
 
 (defstruct ilog-log-entry
   keys command buffer-name (pre-messages "") (post-messages "") changed-buffer-p loads)
@@ -270,57 +420,71 @@ Goes to `post-command-hook'."
     (setf (ilog-log-entry-loads (car ilog-recent-commands)) (ilog-parse-load-tree))
     (setq ilog-temp-load-hist nil)))
 
-(defun ilog-update-log-buffer ()
+(defun ilog-timer-function ()
   "Transform and insert pending data into the log buffer."
-  (let* ((ilog-buffer
-          (or (get-buffer ilog-buffer-name)
-              (with-current-buffer (generate-new-buffer ilog-buffer-name)
-                (setq truncate-lines t)
-                (set (make-local-variable 'scroll-margin) 0)
-                (current-buffer))))
-         (ilog-buffer-visible-p nil) (wins-to-scroll ()) ateobp)
-    (with-current-buffer ilog-buffer
+  (when (let ((current-idle-time (current-idle-time)))
+	  (and current-idle-time (> (time-to-seconds current-idle-time) ilog-idle-time)))
+    (let* ((ilog-buffer
+	    (or (get-buffer ilog-buffer-name)
+		(with-current-buffer (generate-new-buffer ilog-buffer-name)
+		  (setq truncate-lines t
+			buffer-invisibility-spec (if ilog-initially-show-buffers '() '(ilog-buffer)))
+		  (set (make-local-variable 'scroll-margin) 0)
+		  (set (make-local-variable 'scroll-conservatively) 10000)
+		  (set (make-local-variable 'scroll-step) 1)
+		  (setq buffer-read-only t)
+		  (ilog-log-buffer-mode)
+		  (current-buffer))))
+	   (ilog-buffer-visible-p nil) ateobp (selected-win (selected-window)))
       (when ilog-tail-mode
-        (let ((point-max (point-max)))
-          (mapc (lambda (frame)
-                  (mapc (lambda (win)
-                          (when (eq (window-buffer win) ilog-buffer)
-                            (setq ilog-buffer-visible-p t)
-                            (when (or (not (eq win (selected-window)))
-				      (= (window-point win) point-max))
-                              (push win wins-to-scroll))))
-                        (window-list frame)))
-                (frame-list))
-          (unless wins-to-scroll (setq ateobp (= (point) (point-max))))))
-      (setq ateobp (eobp))
-      (let ((ilog-changing-log-buffer-p t) (deactivate-mark nil) (inhibit-read-only t))
-        (save-excursion
-          (goto-char (point-max))
-          (dolist (entry (nreverse ilog-recent-commands))
-            (let ((keys        (ilog-log-entry-keys             entry))
-		  (command     (ilog-log-entry-command          entry))
-		  (buf         (ilog-log-entry-buffer-name      entry))
-		  (pre-mess    (ilog-log-entry-pre-messages     entry))
-		  (post-mess   (ilog-log-entry-post-messages    entry))
-		  (changedp    (ilog-log-entry-changed-buffer-p entry))
-		  (load-levels (ilog-log-entry-loads            entry)))
-              (insert (if (looking-back "\\`\\|\n") "" "\n")
-                      (ilog-format-messages pre-mess)
-                      (propertize (key-description keys)
-                                  'face (case changedp
-                                          ((t)    'ilog-change-face)
-                                          ((echo) 'ilog-echo-face)
-                                          (t      'ilog-non-change-face)))
-                      " " (format "%s" command) " " (format "\"%s\"" buf)
-                      (if post-mess "\n")
-                      (ilog-format-messages post-mess load-levels))
-              (deactivate-mark t)))
-          (setq ilog-recent-commands ())))
-      (when ilog-tail-mode
-        (if ilog-buffer-visible-p
-            (dolist (win wins-to-scroll)
-              (set-window-point win (point-max)))
-          (when ateobp (goto-char (point-max))))))))
+	(setq ilog-eob-wins
+	      (delq selected-win
+		    (delq nil (mapcar (lambda (win) (if (window-live-p win) win nil))
+				      ilog-eob-wins))))
+	(when (and (eq (current-buffer) ilog-buffer) (eobp))
+	  (push selected-win ilog-eob-wins)))
+      (with-current-buffer ilog-buffer
+	(setq ateobp (eobp))
+	(let ((ilog-changing-log-buffer-p t) (deactivate-mark nil) (inhibit-read-only t))
+	  (save-excursion
+	    (goto-char (point-max))
+	    (if ilog-recent-commands
+		(dolist (entry (nreverse ilog-recent-commands))
+		  (let ((keys        (ilog-log-entry-keys             entry))
+			(command     (ilog-log-entry-command          entry))
+			(buf         (ilog-log-entry-buffer-name      entry))
+			(pre-mess    (ilog-log-entry-pre-messages     entry))
+			(post-mess   (ilog-log-entry-post-messages    entry))
+			(changedp    (ilog-log-entry-changed-buffer-p entry))
+			(load-levels (ilog-log-entry-loads            entry)))
+		    (insert (propertize (if (looking-back "\\`\\|\n") "" "\n")
+					'invisible 'ilog-command)
+			    (ilog-format-messages pre-mess)
+			    (propertize (key-description keys)
+					'face (case changedp
+						((t)    'ilog-change-face)
+						((echo) 'ilog-echo-face)
+						(t      'ilog-non-change-face))
+					'invisible 'ilog-command)
+			    (propertize (concat " " (format "%s" command))
+					'invisible 'ilog-command)
+			    (propertize (format " %s" buf)
+					'face 'ilog-buffer-face
+					'invisible 'ilog-buffer)
+			    (when post-mess (propertize "\n" 'invisible 'ilog-command))
+			    (ilog-format-messages post-mess load-levels))
+		    (deactivate-mark t)))
+	      ;; No keys hitten.  Collect new messages
+	      (let ((messages (ilog-get-last-messages)))
+		(unless (string= messages "")
+		  (insert (ilog-format-messages messages)))))
+	    (set-buffer-modified-p nil)
+	    (setq ilog-recent-commands ())))
+	(when ilog-tail-mode
+	  (if ilog-eob-wins
+	      (dolist (win ilog-eob-wins)
+		(set-window-point win (point-max)))
+	    (when ateobp (goto-char (point-max)))))))))
 
 (defun ilog-cut-surrounding-newlines (string)
   "Cut all newlines at beginning and end of STRING.
@@ -335,18 +499,16 @@ Return the result."
   "Format and propertize messages in STRING."
   (if (and (stringp string) (not (equal string "")))
       (let ((messages (ilog-cut-surrounding-newlines string)))
-        (concat
-         (mapconcat
-          (lambda (line)
-            (let ((load-mesg-p (when (get-text-property 0 'load-message line)
-                                 (prog1 (car load-levels)
-                                   (callf cdr load-levels)))))
-              (concat (if load-mesg-p (make-string load-mesg-p ?\ ) "")
-               (propertize line
-                           'face (if load-mesg-p 'ilog-load-face 'ilog-message-face)))))
-          (split-string messages "\n")
-          "\n")
-         "\n"))
+	(mapconcat 
+	 (lambda (line)
+	   (let ((load-mesg-p (when (get-text-property 0 'load-message line)
+				(prog1 (car load-levels)
+				  (callf cdr load-levels)))))
+	     (propertize
+	      (concat (if load-mesg-p (make-string load-mesg-p ?\ ) "") line "\n")
+	      'face (if load-mesg-p 'ilog-load-face 'ilog-message-face)
+	      'invisible (if load-mesg-p 'ilog-load 'ilog-message))))
+	 (split-string messages "\n") ""))
     ""))
 
 (defun ilog-note-buffer-change (&rest _)
@@ -375,8 +537,6 @@ Area."
             (delete-region (point-min) (point))))))))
 
 
-
 (provide 'interaction-log)
-
 
 ;;; interaction-log.el ends here
