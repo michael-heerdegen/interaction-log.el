@@ -129,7 +129,7 @@ more stuff is added.
 When nil, the cursor will stay at the same text position."
   :group 'interaction-log :type 'boolean)
 
-(defcustom ilog-log-max 500
+(defcustom ilog-log-max t
   "Maximum number of lines to keep in the *Emacs Log* buffer.
 If t, don't truncate the buffer when it becomes large.
 
@@ -522,13 +522,15 @@ Goes to `post-command-hook'."
 		(unless (string= messages "")
 		  (insert (ilog-format-messages messages))
 		  (setq ilog-last-inserted-command nil))))
-	    (set-buffer-modified-p nil)
 	    (setq ilog-recent-commands ())))
-	(when ilog-tail-mode
-	  (if ilog-eob-wins
-	      (dolist (win ilog-eob-wins)
-		(set-window-point win (point-max)))
-	    (when ateobp (goto-char (point-max)))))))))
+	(when (buffer-modified-p) ; only do stuff triggering redisplay
+				  ; when buffer was really modified
+	  (set-buffer-modified-p nil)
+	  (when ilog-tail-mode
+	    (if ilog-eob-wins
+		(dolist (win ilog-eob-wins)
+		  (set-window-point win (point-max)))
+	      (when ateobp (goto-char (point-max))))))))))
 
 (defun ilog-cut-surrounding-newlines (string)
   "Cut all newlines at beginning and end of STRING.
