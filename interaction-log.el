@@ -8,7 +8,7 @@
 ;; Created: Dec 29 2012
 ;; Keywords: convenience
 ;; Homepage: https://github.com/michael-heerdegen/interaction-log.el
-;; Version: 1.1
+;; Version: 1.2
 
 
 ;; This file is not part of GNU Emacs.
@@ -81,29 +81,22 @@
   :group 'convenience)
 
 (defface ilog-non-change-face
-  '((default :weight bold)
-    (((class color) (min-colors 16) (background light)) :foreground "ForestGreen")
+  '((((class color) (min-colors 16) (background light)) :foreground "ForestGreen")
     (((class color) (min-colors 88) (background dark))  :foreground "Green1")
     (((class color) (min-colors 16) (background dark))  :foreground "Green")
-    (((class color)) :foreground "green")) ; i.e. "success" in Emacs 24
+    (((class color)) :foreground "green"))
   "Face for keys that didn't cause buffer changes."
   :group 'interaction-log)
 
 (defface ilog-change-face
-  '((default :weight bold)
-    (((class color) (min-colors 16)) :foreground "DarkOrange")
-    (((class color)) :foreground "yellow")) ; i.e. "warning" in Emacs 24
+  '((((class color) (min-colors 16)) :foreground "DarkOrange")
+    (((class color)) :foreground "yellow"))
   "Face for keys that caused buffer changes."
   :group 'interaction-log)
 
 (defface ilog-echo-face
-  '((default :weight bold)
-    (((class color) (min-colors 88) (background light)) :foreground "Red1")
-    (((class color) (min-colors 88) (background dark))  :foreground "Pink")
-    (((class color) (min-colors 16) (background light)) :foreground "Red1")
-    (((class color) (min-colors 16) (background dark))  :foreground "Pink")
-    (((class color) (min-colors 8)) :foreground "red")
-    (t :inverse-video t))	; i.e. "error" in Emacs 24
+  '((((class color) (min-colors 8)) :foreground "red")
+    (t :inverse-video t))
   "Face for keys that caused text being displayed in the echo area."
   :group 'interaction-log)
 
@@ -163,6 +156,20 @@ typing \\<ilog-log-buffer-mode-map>\\[ilog-toggle-display-buffer-names]."
 (defcustom ilog-log-buffer-mode-hook '()
   "Hook run when entering `ilog-log-buffer-mode'."
   :group 'interaction-log :type 'hook)
+
+(defcustom ilog-print-lambdas nil
+  "Whether to print anonymous functions in the log.
+Controls how commands that are not associated with a symbol are
+printed.
+When nil, replace all anonymous commands with a placeholder.
+When t, print all anonymous commands.
+Any other value means: print uncompiled lambda expressions, but use a
+placeholder for byte code functions."
+  :group 'interaction-log
+  :type '(choice
+          (const :tag "Don't print anonymous commands"   nil)
+          (const :tag "Print lambdas, but not byte code" not-compiled)
+          (const :tag "Always print anonymous commands"  t)))
 
 (defcustom ilog-new-frame-parameters
   '((menu-bar-lines .         0)
@@ -230,6 +237,14 @@ Bound to t  when adding to the log buffer.")
   "Last inserted command, as a `ilog-log-entry' struct.
 nil when the last inserted line was not a command (even if a
 post-messg).")
+
+(defvar ilog-self-insert-command-regexps
+  '("self-insert-command$" "isearch-printing-char")
+  "List of regexps matching self inserting commands.
+Commands whose names are matched by any of these regexps are
+displayed specially in the log buffer.  Successive invocations
+are accumulated in one line, while command and buffer name are
+neglected.")
 
 
 ;;; User commands
@@ -326,6 +341,19 @@ the newly created frame."
 
 ;;; Helper funs
 
+(defun ilog-self-insert-command-p (object)
+  "Whether OBJECT is a self inserting command.
+This is the case when OBJECT is an `fboundp' symbol whose name is
+matched by any regexp in  `ilog-self-insert-command-regexps'."
+  (let (name)
+    (and (symbolp object)
+	 (setq name (symbol-name object))
+	 (catch 'match
+	   (mapc (lambda (regexp) (when (string-match-p regexp name) (throw 'match t)))
+		 ilog-self-insert-command-regexps)
+	   nil)
+	 (fboundp object))))
+
 (defun ilog-log-buf-current-or-barf ()
   "Barf if the ilog log buffer is not current."
   (unless (eq (current-buffer) (get-buffer ilog-buffer-name))
@@ -412,12 +440,17 @@ in *Messages* since the last call of this function."
 			(this-command-keys-vector)))))
 	(command (cond
 		  ((ilog-entering-password-p) "(entering-password)")
-		  ((not (symbolp this-command)) "(anonymous command)")
-		  (t this-command)))
+		  ((symbolp this-command) this-command)
+		  ((not ilog-print-lambdas) "<anonymous command>")
+		  ((or (not (byte-code-function-p this-command))
+		       (eq t ilog-print-lambdas))
+		   this-command)
+		  (t "<byte code>")))
 	(buffer-name (buffer-name))
 	(pre-messages (ilog-get-last-messages))
 	(last-log-entry (car ilog-recent-commands)))
-    (if (and last-log-entry ;check whether we can akkumulate while recording
+    (if (and last-log-entry ;check whether we can accumulate while recording
+	     (not (ilog-self-insert-command-p command))
 	     (equal keys        (ilog-log-entry-keys        last-log-entry))
 	     (equal command     (ilog-log-entry-command     last-log-entry))
 	     (equal buffer-name (ilog-log-entry-buffer-name last-log-entry))
@@ -455,6 +488,8 @@ Goes to `post-command-hook'."
 		  (set (make-local-variable 'scroll-margin) 0)
 		  (set (make-local-variable 'scroll-conservatively) 10000)
 		  (set (make-local-variable 'scroll-step) 1)
+		  (set (make-local-variable 'cursor-in-non-selected-windows) nil)
+		  (set (make-local-variable 'auto-hscroll-mode) nil)
 		  (setq buffer-read-only t)
 		  (ilog-log-buffer-mode)
 		  (current-buffer))))
@@ -481,10 +516,24 @@ Goes to `post-command-hook'."
 			(changedp    (ilog-log-entry-changed-buffer-p entry))
 			(mult        (ilog-log-entry-mult             entry))
 			(load-levels (ilog-log-entry-loads            entry)))
+		    
+		    ;; Insert cached commands
+		    ;; 
+		    ;; Accumulating commands satisfying `ilog-self-insert-command-p'
+		    ;; is done by simply going backwards.
+		    ;; 
+		    ;; Other commands were accumulated right from recording.  We have
+		    ;; to check whether	the first cached command may be	added to the last
+		    ;; inserted line.
+		    ;;
+		    ;; Newline characters are always prepended to a chunk when
+		    ;; appropriate and share its invisible spec.
+		    
 		    (when firstp
 		      (setq firstp nil)
 		      ;; check whether to combine with last inserted line
 		      (when (and ilog-last-inserted-command
+				 (not (ilog-self-insert-command-p command))
 				 (equal keys    (ilog-log-entry-keys    ilog-last-inserted-command))
 				 (equal command (ilog-log-entry-command ilog-last-inserted-command))
 				 (equal buf (ilog-log-entry-buffer-name ilog-last-inserted-command))
@@ -498,22 +547,41 @@ Goes to `post-command-hook'."
 			(search-backward-regexp "[^[:space:]]")
 			(beginning-of-line)
 			(delete-region (point) (point-max))))
-		    (insert (propertize (if (looking-back "\\`\\|\n") "" "\n")
-					'invisible 'ilog-command)
-			    (ilog-format-messages pre-mess)
-			    (propertize (concat (if (> mult 1) (format "%s*" mult) "")
-						(key-description keys))
-					'face (case changedp
-						((t)    'ilog-change-face)
-						((echo) 'ilog-echo-face)
-						(t      'ilog-non-change-face))
-					'invisible 'ilog-command)
-			    (propertize (concat " " (format "%s" command))
-					'invisible 'ilog-command)
-			    (propertize (format " %s" buf)
-					'face 'ilog-buffer-face
-					'invisible 'ilog-buffer)
-			    (when post-mess (propertize "\n" 'invisible 'ilog-command))
+		    (insert (if (and (equal pre-mess "")
+				     (ilog-self-insert-command-p command))
+				(progn
+				  ;; check whether to add to last line
+				  (if (not (and ilog-last-inserted-command
+						(ilog-self-insert-command-p
+						 (ilog-log-entry-command ilog-last-inserted-command))))
+				      (insert (propertize (if (looking-back "\\`\\|\n") "" "\n")
+							  'invisible 'ilog-command))
+				    (search-backward-regexp "[^[:space:]]")
+				    (forward-char 1)
+				    (delete-region (point) (point-max))
+				    (goto-char (point-max)))
+				  (propertize (key-description keys)
+					      'face (case changedp
+						      ((t)    'ilog-change-face)
+						      ((echo) 'ilog-echo-face)
+						      (t      'ilog-non-change-face))
+					      'invisible 'ilog-command))
+			      (concat
+			       (ilog-format-messages pre-mess)
+			       (propertize (if (looking-back "\\`\\|\n") "" "\n")
+					   'invisible 'ilog-command)
+			       (propertize (concat (if (> mult 1) (format "%s*" mult) "")
+						   (key-description keys))
+					   'face (case changedp
+						   ((t)    'ilog-change-face)
+						   ((echo) 'ilog-echo-face)
+						   (t      'ilog-non-change-face))
+					   'invisible 'ilog-command)
+			       (propertize (concat " " (format "%s" command))
+					   'invisible 'ilog-command)
+			       (propertize (format " %s" buf)
+					   'face 'ilog-buffer-face
+					   'invisible 'ilog-buffer)))
 			    (ilog-format-messages post-mess load-levels))
 		    (setq ilog-last-inserted-command (and (equal post-mess "") entry))
 		    (deactivate-mark t)))
@@ -523,8 +591,8 @@ Goes to `post-command-hook'."
 		  (insert (ilog-format-messages messages))
 		  (setq ilog-last-inserted-command nil))))
 	    (setq ilog-recent-commands ())))
-	(when (buffer-modified-p) ; only do stuff triggering redisplay
-				  ; when buffer was really modified
+	(when (buffer-modified-p)
+	  ;; only do stuff triggering redisplay when buffer was modified
 	  (set-buffer-modified-p nil)
 	  (when ilog-tail-mode
 	    (if ilog-eob-wins
@@ -551,7 +619,7 @@ Return the result."
 				(prog1 (car load-levels)
 				  (callf cdr load-levels)))))
 	     (propertize
-	      (concat (if load-mesg-p (make-string load-mesg-p ?\ ) "") line "\n")
+	      (concat  "\n" (if load-mesg-p (make-string load-mesg-p ?\ ) "") line)
 	      'face (if load-mesg-p 'ilog-load-face 'ilog-message-face)
 	      'invisible (if load-mesg-p 'ilog-load 'ilog-message))))
 	 (split-string messages "\n") ""))

@@ -1,6 +1,5 @@
 Interaction Log TODO
 
-
 * TODO Use more than one toggle command?
 
 * TODO In some cases, loads are not indented and fontified, e.g. for
@@ -9,6 +8,5 @@ autoloaded M-x `org-capture'
 * TODO indent the first and second column in the log to a certain
 column number, use ellipses when too long
 
-* TODO accumulate self-insert-commands
+* TODO Bug: M-x term in char-mode: changed state shifted by one
 
-* TODO make printing anonymous functions customizable
