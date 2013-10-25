@@ -1,12 +1,18 @@
 Interaction Log TODO
 
-* TODO Use more than one toggle command?
 
-* TODO In some cases, loads are not indented and fontified, e.g. for
-autoloaded M-x `org-capture'
+* TODO Sometimes, the buffer is not moved so that the last line is
+  visible - see http://screencast.com/t/ZbeSM4k37i (Thanks to
+  Sebastian)
+
+* TODO Use more than one toggle command?
 
 * TODO indent the first and second column in the log to a certain
 column number, use ellipses when too long
 
-* TODO Bug: M-x term in char-mode: changed state shifted by one
+* Get rid of setq user options buffer locally
 
+* TODO no hscrolling in the log buffer sucks
+Enable it again.  At end of `ilog-timer-function', go to the
+beginning of the line (it goes to the eob at the beginning).  For
+tail-mode, let whole last line count as eob.

@@ -44,7 +44,9 @@
 ;;; You probably will want to have a hotkey for showing the log
 ;;; buffer, so also add something like
 ;;;
-;;; (global-set-key [f1] (lambda () (interactive) (display-buffer ilog-buffer-name)))
+;;; (global-set-key
+;;;  (kbd "C-h C-l")
+;;;  (lambda () (interactive) (pop-to-buffer ilog-buffer-name)))
 ;;;
 ;;; Alternatively, there is a command `ilog-show-in-new-frame' that
 ;;; you can use to display the log buffer in a little new frame whose
@@ -81,28 +83,27 @@
   :group 'convenience)
 
 (defface ilog-non-change-face
-  '((((class color) (min-colors 16) (background light)) :foreground "ForestGreen")
-    (((class color) (min-colors 88) (background dark))  :foreground "Green1")
-    (((class color) (min-colors 16) (background dark))  :foreground "Green")
-    (((class color)) :foreground "green"))
+  '((((class color) (min-colors 88) (background light)) :foreground "ForestGreen")
+    (((class color) (min-colors 88) (background dark))  :foreground "YellowGreen")
+    (((class color)) :foreground "Green"))
   "Face for keys that didn't cause buffer changes."
   :group 'interaction-log)
 
 (defface ilog-change-face
-  '((((class color) (min-colors 16)) :foreground "DarkOrange")
-    (((class color)) :foreground "yellow"))
+  '((((class color) (min-colors 88)) :foreground "DarkOrange")
+    (((class color)) :foreground "Yellow"))
   "Face for keys that caused buffer changes."
   :group 'interaction-log)
 
 (defface ilog-echo-face
-  '((((class color) (min-colors 8)) :foreground "red")
+  '((((class color) (min-colors 8)) :foreground "Red")
     (t :inverse-video t))
   "Face for keys that caused text being displayed in the echo area."
   :group 'interaction-log)
 
 (defface ilog-buffer-face
   '((((class color) (min-colors 88) (background light)) :foreground "DarkBlue")
-    (((class color) (min-colors 88) (background dark)) :foreground "Light Slate Blue")
+    (((class color) (min-colors 88) (background dark))  :foreground "LightSlateBlue")
     (t :weight bold))
   "Face for buffer names.")
 
@@ -146,6 +147,7 @@ typing \\<ilog-log-buffer-mode-map>\\[ilog-toggle-display-buffer-names]."
   (let ((map (make-sparse-keymap)))
     (define-key map [?t] #'ilog-toggle-view)
     (define-key map [?b] #'ilog-toggle-display-buffer-names)
+    (define-key map [?q] #'bury-buffer)
     map)
   "Keymap for `ilog-log-buffer-mode'.")
 
@@ -209,9 +211,6 @@ These parameters are applied to the new frame."
   "Non-nil means buffer changes should not be recorded.
 Bound to t  when adding to the log buffer.")
 
-(defvar ilog-last-command-changed-buffer-p nil
-  "Whether the last command caused changes to any buffer.")
-
 (defvar ilog-buffer-name "*Emacs Log*"
   "The name used for the log buffer.")
 
@@ -226,9 +225,6 @@ Bound to t  when adding to the log buffer.")
 
 (defvar ilog-insertion-timer nil)
 
-(defvar ilog-temp-load-hist nil
-  "Holding file loads not-yet processed.")
-
 (defvar ilog-display-state nil)
 
 (defvar ilog-eob-wins '())
@@ -239,7 +235,7 @@ nil when the last inserted line was not a command (even if a
 post-messg).")
 
 (defvar ilog-self-insert-command-regexps
-  '("self-insert-command$" "isearch-printing-char")
+  '("self-insert-command$" "isearch-printing-char" "term-send-raw")
   "List of regexps matching self inserting commands.
 Commands whose names are matched by any of these regexps are
 displayed specially in the log buffer.  Successive invocations
@@ -369,46 +365,34 @@ Key bindings:
   :after-hook ilog-log-buffer-mode-hook)
 
 (defstruct ilog-log-entry
-  keys command buffer-name (pre-messages "") (post-messages "") changed-buffer-p loads (mult 1))
+  keys command buffer-name (pre-messages "") (post-messages "") changed-buffer-p (mult 1))
+
+(quote
+ (defun ilog-get-load-level ()
+   "Return the current load level as an integer."
+   (let ((i 0) (level 0))
+     (while (let ((frame (backtrace-frame i)))
+	      (if (not frame)
+		  nil
+		(incf i)
+		(when (memq (cadr frame) '(load require)) (incf level))
+		t)))
+     level)))
 
 (defun ilog-log-file-load (file)
-  "Annotate a file load in `ilog-temp-load-hist'."
+  "Annotate a file load."
   (when ilog-recent-commands
     (callf concat (ilog-log-entry-post-messages (car ilog-recent-commands))
       (ilog-get-last-messages)
       (propertize
-       (concat (if load-file-name
-                   (concat (file-name-sans-extension (file-name-nondirectory load-file-name))
-                           " loaded ")
-                 "Loaded ")
-               file)
+       (concat
+	(file-name-sans-extension (file-name-nondirectory file)) " was loaded"
+	(if load-file-name
+	    (concat " by " (file-name-sans-extension (file-name-nondirectory load-file-name)))
+	  "")
+	" from " file)
        'load-message t)
-      "\n")
-    ;; ilog-temp-load-hist
-    (push (cons load-file-name file) ilog-temp-load-hist)))
-
-(defun ilog-parse-load-tree ()
-  "Calculate load levels according to `ilog-temp-load-hist'.
-Save the result in `ilog-temp-load-hist'."
-  ;; Or is there a more efficient way to get the load recursion depth?
-  (prog1  (let ((last-loaded ()) parser)
-	    (setq parser (lambda (accumulated entries)
-			   (if (null entries)
-			       accumulated
-			     (let* ((entry (car entries))
-				    (loaded-directly-p (not (car entry)))
-				    (loaded-by-ancestor-p (and (car entry)
-							       (member (car entry) last-loaded)))
-				    (last-loaded
-				     (cond
-				      (loaded-directly-p (list (cdr entry)))
-				      (loaded-by-ancestor-p (cons (cdr entry) loaded-by-ancestor-p))
-				      (t             (list* (cdr entry) (car entry) (cdr last-loaded))))))
-			       (funcall parser
-					(cons (1- (length last-loaded)) accumulated)
-					(cdr entries))))))
-	    (funcall parser () ilog-temp-load-hist))
-    (setq ilog-temp-load-hist '())))
+      "\n")))
 
 (add-hook 'after-load-functions #'ilog-log-file-load)
 
@@ -455,8 +439,7 @@ in *Messages* since the last call of this function."
 	     (equal command     (ilog-log-entry-command     last-log-entry))
 	     (equal buffer-name (ilog-log-entry-buffer-name last-log-entry))
 	     (string= "" pre-messages)
-	     (string= "" (ilog-log-entry-post-messages last-log-entry))
-	     (not (ilog-log-entry-loads last-log-entry)))
+	     (string= "" (ilog-log-entry-post-messages last-log-entry)))
 	(incf (ilog-log-entry-mult last-log-entry))
       (push (make-ilog-log-entry
 	     :keys keys
@@ -469,12 +452,7 @@ in *Messages* since the last call of this function."
   "DTRT after a command was executed.
 Goes to `post-command-hook'."
   (when ilog-recent-commands
-    (callf concat (ilog-log-entry-post-messages (car ilog-recent-commands)) (ilog-get-last-messages))
-    (setf (ilog-log-entry-changed-buffer-p (car ilog-recent-commands))
-	  ilog-last-command-changed-buffer-p)
-    (setq ilog-last-command-changed-buffer-p nil)
-    ;; handle load-tree
-    (setf (ilog-log-entry-loads (car ilog-recent-commands)) (ilog-parse-load-tree))))
+    (callf concat (ilog-log-entry-post-messages (car ilog-recent-commands)) (ilog-get-last-messages))))
 
 (defun ilog-timer-function ()
   "Transform and insert pending data into the log buffer."
@@ -483,8 +461,7 @@ Goes to `post-command-hook'."
     (let* ((ilog-buffer
 	    (or (get-buffer ilog-buffer-name)
 		(with-current-buffer (generate-new-buffer ilog-buffer-name)
-		  (setq truncate-lines t
-			buffer-invisibility-spec (if ilog-initially-show-buffers '() '(ilog-buffer)))
+		  (setq buffer-invisibility-spec (if ilog-initially-show-buffers '() '(ilog-buffer)))
 		  (set (make-local-variable 'scroll-margin) 0)
 		  (set (make-local-variable 'scroll-conservatively) 10000)
 		  (set (make-local-variable 'scroll-step) 1)
@@ -514,8 +491,7 @@ Goes to `post-command-hook'."
 			(pre-mess    (ilog-log-entry-pre-messages     entry))
 			(post-mess   (ilog-log-entry-post-messages    entry))
 			(changedp    (ilog-log-entry-changed-buffer-p entry))
-			(mult        (ilog-log-entry-mult             entry))
-			(load-levels (ilog-log-entry-loads            entry)))
+			(mult        (ilog-log-entry-mult             entry)))
 		    
 		    ;; Insert cached commands
 		    ;; 
@@ -547,11 +523,11 @@ Goes to `post-command-hook'."
 			(search-backward-regexp "[^[:space:]]")
 			(beginning-of-line)
 			(delete-region (point) (point-max))))
-		    (insert (if (and (equal pre-mess "")
-				     (ilog-self-insert-command-p command))
+		    (insert (if (ilog-self-insert-command-p command)
 				(progn
 				  ;; check whether to add to last line
 				  (if (not (and ilog-last-inserted-command
+						(equal pre-mess "")
 						(ilog-self-insert-command-p
 						 (ilog-log-entry-command ilog-last-inserted-command))))
 				      (insert (propertize (if (looking-back "\\`\\|\n") "" "\n")
@@ -570,7 +546,7 @@ Goes to `post-command-hook'."
 			       (ilog-format-messages pre-mess)
 			       (propertize (if (looking-back "\\`\\|\n") "" "\n")
 					   'invisible 'ilog-command)
-			       (propertize (concat (if (> mult 1) (format "%s*" mult) "")
+			       (propertize (concat (if (> mult 1) (format "%s * " mult) "")
 						   (key-description keys))
 					   'face (case changedp
 						   ((t)    'ilog-change-face)
@@ -582,10 +558,10 @@ Goes to `post-command-hook'."
 			       (propertize (format " %s" buf)
 					   'face 'ilog-buffer-face
 					   'invisible 'ilog-buffer)))
-			    (ilog-format-messages post-mess load-levels))
+			    (ilog-format-messages post-mess))
 		    (setq ilog-last-inserted-command (and (equal post-mess "") entry))
 		    (deactivate-mark t)))
-	      ;; No keys hitten.  Collect new messages
+	      ;; No keys were hit.  Only collect new messages.
 	      (let ((messages (ilog-get-last-messages)))
 		(unless (string= messages "")
 		  (insert (ilog-format-messages messages))
@@ -609,17 +585,17 @@ Return the result."
     (setq string (substring string (match-end 0))))
   string)
 
-(defun ilog-format-messages (string &optional load-levels)
+(defun ilog-format-messages (string)
   "Format and propertize messages in STRING."
   (if (and (stringp string) (not (equal string "")))
       (let ((messages (ilog-cut-surrounding-newlines string)))
 	(mapconcat 
 	 (lambda (line)
-	   (let ((load-mesg-p (when (get-text-property 0 'load-message line)
-				(prog1 (car load-levels)
-				  (callf cdr load-levels)))))
+	   (let ((load-mesg-p (get-text-property 0 'load-message line)))
 	     (propertize
-	      (concat  "\n" (if load-mesg-p (make-string load-mesg-p ?\ ) "") line)
+	      (concat  "\n"
+		       ;; (if load-mesg-p (make-string load-mesg-p ?\ ) "") ;;
+		       line)
 	      'face (if load-mesg-p 'ilog-load-face 'ilog-message-face)
 	      'invisible (if load-mesg-p 'ilog-load 'ilog-message))))
 	 (split-string messages "\n") ""))
@@ -633,9 +609,10 @@ Area."
   ;; errors
   (when (and (not ilog-changing-log-buffer-p)
              ilog-recent-commands)
-    (if (string-match "\\` \\*Echo Area" (buffer-name))
-        (setq ilog-last-command-changed-buffer-p 'echo)
-      (setq ilog-last-command-changed-buffer-p (not (minibufferp))))))
+    (setf (ilog-log-entry-changed-buffer-p (car ilog-recent-commands))
+	  (if (string-match "\\` \\*Echo Area" (buffer-name))
+	      'echo
+	    t))))
 
 (defun ilog-truncate-log-buffer ()
   "Truncate the log buffer to `ilog-log-max' lines."
