@@ -32,7 +32,8 @@
 ;;; This package provides a buffer *Emacs Log* showing the last hit
 ;;; keys and executed commands, messages and file loads in
 ;;; chronological order.  This enables you to reconstruct the last
-;;; seconds of your work with Emacs.
+;;; seconds of your work with Emacs.  It's also useful for
+;;; giving presentations or making screencasts with Emacs.
 ;;;
 ;;; Installation: Put this file in your load path and byte-compile it.
 ;;; To start logging automatically at startup, add this to your init
@@ -46,7 +47,7 @@
 ;;;
 ;;; (global-set-key
 ;;;  (kbd "C-h C-l")
-;;;  (lambda () (interactive) (pop-to-buffer ilog-buffer-name)))
+;;;  (lambda () (interactive) (display-buffer ilog-buffer-name)))
 ;;;
 ;;; Alternatively, there is a command `ilog-show-in-new-frame' that
 ;;; you can use to display the log buffer in a little new frame whose
@@ -56,12 +57,11 @@
 ;;; Usage: Use `interaction-log-mode' to toggle logging.  Enabling the
 ;;; mode will cause all messages and all pressed keys (along with the
 ;;; actually executed command and the according buffer) to be logged
-;;; in the background.  Also loading of files will be logged - in a
-;;; tree-style manner for recursive loads.  If an executed command
-;;; causes any buffer to change, it will be highlighted in orange so
-;;; you can check if you made changes by accident.  If a command
-;;; caused any message to be displayed in the echo area (e.g. if an
-;;; error occurred), it is highlighted in red.
+;;; in the background.  Also loading of files will be logged.  If an
+;;; executed command causes any buffer to change, it will be
+;;; highlighted in orange so you can check if you made changes by
+;;; accident.  If a command caused any message to be displayed in the
+;;; echo area (e.g. if an error occurred), it is highlighted in red.
 ;;; 
 ;;; If you find any bugs or have suggestions for improvement, please
 ;;; tell me!
@@ -85,13 +85,13 @@
 (defface ilog-non-change-face
   '((((class color) (min-colors 88) (background light)) :foreground "ForestGreen")
     (((class color) (min-colors 88) (background dark))  :foreground "YellowGreen")
-    (((class color)) :foreground "Green"))
+    (((class color) (min-colors 8))                     :foreground "Green"))
   "Face for keys that didn't cause buffer changes."
   :group 'interaction-log)
 
 (defface ilog-change-face
   '((((class color) (min-colors 88)) :foreground "DarkOrange")
-    (((class color)) :foreground "Yellow"))
+    (((class color) (min-colors 8))  :foreground "Yellow"))
   "Face for keys that caused buffer changes."
   :group 'interaction-log)
 
@@ -104,14 +104,22 @@
 (defface ilog-buffer-face
   '((((class color) (min-colors 88) (background light)) :foreground "DarkBlue")
     (((class color) (min-colors 88) (background dark))  :foreground "LightSlateBlue")
-    (t :weight bold))
-  "Face for buffer names.")
+    (((class color) (min-colors 8))                     :foreground "Blue"))
+  "Face for buffer names."
+  :group 'interaction-log)
 
-(defface ilog-load-face '((t (:inherit 'font-lock-string-face)))
+(defface ilog-load-face
+  '((((class color) (min-colors 88) (background light)) :foreground "Gold4")
+    (((class color) (min-colors 88) (background dark))  :foreground "Yellow")
+    (((class color) (min-colors 8))                     :foreground "Magenta"))
   "Face for lines describing file loads."
   :group 'interaction-log)
 
-(defface ilog-message-face '((t (:inherit shadow)))
+(defface ilog-message-face
+  '((((class color grayscale) (min-colors 88) (background light))
+     :foreground "grey50")
+    (((class color grayscale) (min-colors 88) (background dark))
+     :foreground "grey70"))
   "Face for messages."
   :group 'interaction-log)
 
@@ -180,6 +188,7 @@ placeholder for byte code functions."
     (left-fringe  .           0)
     (right-fringe .           1)
     (left         .      (- -17))
+    (user-position .          t)
     (width        .          35)
     (height       .          20)
     (font         .         "8")
@@ -226,8 +235,6 @@ Bound to t  when adding to the log buffer.")
 (defvar ilog-insertion-timer nil)
 
 (defvar ilog-display-state nil)
-
-(defvar ilog-eob-wins '())
 
 (defvar ilog-last-inserted-command nil
   "Last inserted command, as a `ilog-log-entry' struct.
@@ -321,18 +328,11 @@ Customize `ilog-new-frame-parameters' to specify parameters of
 the newly created frame."
   (interactive)
   (unless interaction-log-mode (interaction-log-mode +1))
-  (let ((after-make-frame-functions
-	 (list (lambda (f)
-		 (run-with-idle-timer
-		  0 nil
-		  (lambda (f)
-		    (let ((win (frame-selected-window f)))
-		      (push win ilog-eob-wins)
-		      (set-window-dedicated-p win t)))
-		  f)))))
-    (display-buffer-pop-up-frame
-     ilog-buffer-name
-     `((pop-up-frame-parameters . ,ilog-new-frame-parameters)))))
+  (set-window-dedicated-p
+   (display-buffer-pop-up-frame
+    (get-buffer ilog-buffer-name)
+    `((pop-up-frame-parameters . ,ilog-new-frame-parameters)))
+   t))
 
 
 ;;; Helper funs
@@ -454,6 +454,14 @@ Goes to `post-command-hook'."
   (when ilog-recent-commands
     (callf concat (ilog-log-entry-post-messages (car ilog-recent-commands)) (ilog-get-last-messages))))
 
+(defun ilog-last-line-pos (&optional beg-of-last-line)
+  "Where to move point in log buffer after insertion.
+This is `point-max' or the beginning of the last line when
+BEG-OF-LAST-LINE is non-nil."
+  (save-excursion
+    (goto-char (point-max))
+    (if beg-of-last-line (line-beginning-position) (point))))
+
 (defun ilog-timer-function ()
   "Transform and insert pending data into the log buffer."
   (when (let ((current-idle-time (current-idle-time)))
@@ -466,20 +474,18 @@ Goes to `post-command-hook'."
 		  (set (make-local-variable 'scroll-conservatively) 10000)
 		  (set (make-local-variable 'scroll-step) 1)
 		  (set (make-local-variable 'cursor-in-non-selected-windows) nil)
-		  (set (make-local-variable 'auto-hscroll-mode) nil)
 		  (setq buffer-read-only t)
 		  (ilog-log-buffer-mode)
 		  (current-buffer))))
-	   ateobp (selected-win (selected-window)))
-      (when ilog-tail-mode
-	(setq ilog-eob-wins
-	      (delq selected-win
-		    (delq nil (mapcar (lambda (win) (if (window-live-p win) win nil))
-				      ilog-eob-wins))))
-	(when (and (eq (current-buffer) ilog-buffer) (eobp))
-	  (push selected-win ilog-eob-wins)))
+	   eob ateobp ilog-eob-wins)
       (with-current-buffer ilog-buffer
-	(setq ateobp (eobp))
+	(when ilog-tail-mode
+	  (setq eob (ilog-last-line-pos truncate-lines))
+	  (setq ateobp (>= (point) eob))
+	  (setq ilog-eob-wins
+		(delq nil
+		      (mapcar (lambda (win) (and (>= (window-point win) eob) win))
+			      (get-buffer-window-list ilog-buffer nil t)))))
 	(let ((ilog-changing-log-buffer-p t) (deactivate-mark nil) (inhibit-read-only t) (firstp t))
 	  (save-excursion
 	    (goto-char (point-max))
@@ -571,10 +577,11 @@ Goes to `post-command-hook'."
 	  ;; only do stuff triggering redisplay when buffer was modified
 	  (set-buffer-modified-p nil)
 	  (when ilog-tail-mode
-	    (if ilog-eob-wins
-		(dolist (win ilog-eob-wins)
-		  (set-window-point win (point-max)))
-	      (when ateobp (goto-char (point-max))))))))))
+	    (let ((end (ilog-last-line-pos truncate-lines)))
+	      (if ilog-eob-wins
+		  (dolist (win ilog-eob-wins)
+		    (set-window-point win end))
+		(when ateobp (goto-char end))))))))))
 
 (defun ilog-cut-surrounding-newlines (string)
   "Cut all newlines at beginning and end of STRING.
