@@ -123,13 +123,19 @@
   "Face for messages."
   :group 'interaction-log)
 
-(defcustom ilog-tail-mode t
+(defcustom ilog-tail-mode 'strict
   "When non-nil, let the cursor follow the end of the log buffer.
-This is like in *Messages*: if you put the cursor at the end of
-the *Emacs Log* buffer, it will stay at the buffer's end when
-more stuff is added.
-When nil, the cursor will stay at the same text position."
-  :group 'interaction-log :type 'boolean)
+When t, this is like in *Messages*: if you put the cursor at the
+end of the *Emacs Log* buffer, it will stay at the buffer's end
+when more stuff is added.  When nil, the cursor will stay at the
+same text position.  When the value is strict, move
+`window-point' to the end even when it was not there, except for
+the case that the log buffer window is current."
+  :group 'interaction-log
+  :type '(choice
+          (const    nil)
+          (const      t)
+          (const strict)))
 
 (defcustom ilog-log-max t
   "Maximum number of lines to keep in the *Emacs Log* buffer.
@@ -361,7 +367,7 @@ matched by any regexp in  `ilog-self-insert-command-regexps'."
 Key bindings:
 
 \\{ilog-log-buffer-mode-map}"
-  :keymap ilog-log-buffer-mode-map
+  :keymap ilog-log-buffer-mode-map :lighter " Log"
   :after-hook ilog-log-buffer-mode-hook)
 
 (defstruct ilog-log-entry
@@ -483,9 +489,11 @@ BEG-OF-LAST-LINE is non-nil."
 	  (setq eob (ilog-last-line-pos truncate-lines))
 	  (setq ateobp (>= (point) eob))
 	  (setq ilog-eob-wins
-		(delq nil
-		      (mapcar (lambda (win) (and (>= (window-point win) eob) win))
-			      (get-buffer-window-list ilog-buffer nil t)))))
+		(if (eq t ilog-tail-mode)
+		    (delq nil
+			  (mapcar (lambda (win) (and (>= (window-point win) eob) win))
+				  (get-buffer-window-list ilog-buffer nil t)))
+		  (delq (selected-window) (get-buffer-window-list ilog-buffer nil t)))))
 	(let ((ilog-changing-log-buffer-p t) (deactivate-mark nil) (inhibit-read-only t) (firstp t))
 	  (save-excursion
 	    (goto-char (point-max))

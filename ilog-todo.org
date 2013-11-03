@@ -8,6 +8,8 @@ Interaction Log TODO
   so that the last line is not visible - see
   http://screencast.com/t/ZbeSM4k37i (Thanks to Sebastian)
 
+* TODO Should ilog-log-buffer-mode be a major mode?
+
 * TODO Use more than one toggle command?
 
 * TODO indent the first and second column in the log to a certain
