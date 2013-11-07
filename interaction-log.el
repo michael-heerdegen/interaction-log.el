@@ -213,7 +213,7 @@ These parameters are applied to the new frame."
 
 (easy-menu-define ilog-minor-mode-menu ilog-log-buffer-mode-map
   "Menu used when `ilog-log-buffer-mode' is active."
-  '("Log"
+  '("ILog"
     ["Toggle view"           ilog-toggle-view]
     ["Toggle buffer names"   ilog-toggle-display-buffer-names]))
 
