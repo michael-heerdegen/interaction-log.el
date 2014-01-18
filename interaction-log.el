@@ -1,7 +1,7 @@
 ;;; interaction-log.el --- exhaustive log of interactions with Emacs
 
 
-;; Copyright (C) 2012-2013 Michael Heerdegen
+;; Copyright (C) 2012-2014 Michael Heerdegen
 
 ;; Author: Michael Heerdegen <michael_heerdegen@web.de>
 ;; Maintainer: Michael Heerdegen <michael_heerdegen@web.de>
