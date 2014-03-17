@@ -457,6 +457,7 @@ in *Messages* since the last call of this function."
 (defun ilog-post-command ()
   "DTRT after a command was executed.
 Goes to `post-command-hook'."
+  (add-hook 'after-change-functions #'ilog-note-buffer-change) ;$$$$ bug#16796
   (when ilog-recent-commands
     (callf concat (ilog-log-entry-post-messages (car ilog-recent-commands)) (ilog-get-last-messages))))
 
