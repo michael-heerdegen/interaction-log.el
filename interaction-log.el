@@ -574,8 +574,7 @@ BEG-OF-LAST-LINE is non-nil."
 					   'face 'ilog-buffer-face
 					   'invisible 'ilog-buffer)))
 			    (ilog-format-messages post-mess))
-		    (setq ilog-last-inserted-command (and (equal post-mess "") entry))
-		    (deactivate-mark t)))
+		    (setq ilog-last-inserted-command (and (equal post-mess "") entry))))
 	      ;; No keys were hit.  Only collect new messages.
 	      (let ((messages (ilog-get-last-messages)))
 		(unless (string= messages "")
