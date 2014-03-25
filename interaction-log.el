@@ -334,12 +334,11 @@ Customize `ilog-new-frame-parameters' to specify parameters of
 the newly created frame."
   (interactive)
   (unless interaction-log-mode (interaction-log-mode +1))
-  (set-window-dedicated-p
-   (display-buffer-pop-up-frame
-    (get-buffer ilog-buffer-name)
-    `((pop-up-frame-parameters . ,ilog-new-frame-parameters)))
-   t))
-
+  (let ((win (display-buffer-pop-up-frame
+	      (get-buffer ilog-buffer-name)
+	      `((pop-up-frame-parameters . ,ilog-new-frame-parameters)))))
+    (set-window-dedicated-p win t)
+    win))
 
 ;;; Helper funs
 
