@@ -69,7 +69,7 @@
 
 ;;; Code:
 
-(eval-when-compile (require 'cl))
+(require 'cl-lib)
 (require 'timer)
 (require 'font-lock)
 (require 'easymenu)
@@ -289,7 +289,7 @@ Toggle successively between showing only messages, only
 commands, only file loads, and everything."
   (interactive)
   (ilog-log-buf-current-or-barf)
-  (case ilog-display-state
+  (cl-case ilog-display-state
     ((nil)
      (add-to-invisibility-spec 'ilog-command)
      (add-to-invisibility-spec 'ilog-buffer)
@@ -369,7 +369,7 @@ Key bindings:
   :keymap ilog-log-buffer-mode-map :lighter " Log"
   :after-hook ilog-log-buffer-mode-hook)
 
-(defstruct ilog-log-entry
+(cl-defstruct ilog-log-entry
   keys command buffer-name (pre-messages "") (post-messages "") changed-buffer-p (mult 1))
 
 (quote
@@ -379,15 +379,15 @@ Key bindings:
      (while (let ((frame (backtrace-frame i)))
 	      (if (not frame)
 		  nil
-		(incf i)
-		(when (memq (cadr frame) '(load require)) (incf level))
+		(cl-incf i)
+		(when (memq (cadr frame) '(load require)) (cl-incf level))
 		t)))
      level)))
 
 (defun ilog-log-file-load (file)
   "Annotate a file load."
   (when ilog-recent-commands
-    (callf concat (ilog-log-entry-post-messages (car ilog-recent-commands))
+    (cl-callf concat (ilog-log-entry-post-messages (car ilog-recent-commands))
       (ilog-get-last-messages)
       (propertize
        (concat
@@ -445,7 +445,7 @@ in *Messages* since the last call of this function."
 	     (equal buffer-name (ilog-log-entry-buffer-name last-log-entry))
 	     (string= "" pre-messages)
 	     (string= "" (ilog-log-entry-post-messages last-log-entry)))
-	(incf (ilog-log-entry-mult last-log-entry))
+	(cl-incf (ilog-log-entry-mult last-log-entry))
       (push (make-ilog-log-entry
 	     :keys keys
 	     :command command
@@ -458,7 +458,8 @@ in *Messages* since the last call of this function."
 Goes to `post-command-hook'."
   (add-hook 'after-change-functions #'ilog-note-buffer-change) ;$$$$ bug#16796
   (when ilog-recent-commands
-    (callf concat (ilog-log-entry-post-messages (car ilog-recent-commands)) (ilog-get-last-messages))))
+    (cl-callf concat
+        (ilog-log-entry-post-messages (car ilog-recent-commands)) (ilog-get-last-messages))))
 
 (defun ilog-last-line-pos (&optional beg-of-last-line)
   "Where to move point in log buffer after insertion.
@@ -530,8 +531,8 @@ BEG-OF-LAST-LINE is non-nil."
 				 (string= pre-mess "") (string= post-mess "")
 				 (equal changedp (ilog-log-entry-changed-buffer-p
 						  ilog-last-inserted-command))				 )
-			(incf mult (ilog-log-entry-mult ilog-last-inserted-command))
-			(incf (ilog-log-entry-mult entry)
+			(cl-incf mult (ilog-log-entry-mult ilog-last-inserted-command))
+			(cl-incf (ilog-log-entry-mult entry)
 			      (ilog-log-entry-mult ilog-last-inserted-command))
 			;; delete last log line
 			(search-backward-regexp "[^[:space:]]")
@@ -551,7 +552,7 @@ BEG-OF-LAST-LINE is non-nil."
 				    (delete-region (point) (point-max))
 				    (goto-char (point-max)))
 				  (propertize (key-description keys)
-					      'face (case changedp
+					      'face (cl-case changedp
 						      ((t)    'ilog-change-face)
 						      ((echo) 'ilog-echo-face)
 						      (t      'ilog-non-change-face))
@@ -562,7 +563,7 @@ BEG-OF-LAST-LINE is non-nil."
 					   'invisible 'ilog-command)
 			       (propertize (concat (if (> mult 1) (format "%s * " mult) "")
 						   (key-description keys))
-					   'face (case changedp
+					   'face (cl-case changedp
 						   ((t)    'ilog-change-face)
 						   ((echo) 'ilog-echo-face)
 						   (t      'ilog-non-change-face))
