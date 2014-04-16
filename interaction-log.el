@@ -372,18 +372,6 @@ Key bindings:
 (cl-defstruct ilog-log-entry
   keys command buffer-name (pre-messages "") (post-messages "") changed-buffer-p (mult 1))
 
-(quote
- (defun ilog-get-load-level ()
-   "Return the current load level as an integer."
-   (let ((i 0) (level 0))
-     (while (let ((frame (backtrace-frame i)))
-	      (if (not frame)
-		  nil
-		(cl-incf i)
-		(when (memq (cadr frame) '(load require)) (cl-incf level))
-		t)))
-     level)))
-
 (defun ilog-log-file-load (file)
   "Annotate a file load."
   (when ilog-recent-commands
