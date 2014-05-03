@@ -9,6 +9,7 @@
 ;; Keywords: convenience
 ;; Homepage: https://github.com/michael-heerdegen/interaction-log.el
 ;; Version: 1.2
+;; Package-Requires: ((cl-lib "0"))
 
 
 ;; This file is not part of GNU Emacs.
