@@ -393,8 +393,13 @@ Key bindings:
 (defun ilog-get-last-messages ()
   "Return a string including the last messages.
 This is a multiline string containing all messages that appeared
-in *Messages* since the last call of this function."
+in *Messages* since the last call of this function.
+If the *Messages* buffer has been killed, recreate it silently." ; Is this a good idea?
   (with-current-buffer (get-buffer-create "*Messages*")
+    (unless (marker-position ilog-recent-commands-messages-marker)
+      (set-marker-insertion-type
+       (setq ilog-recent-commands-messages-marker (point-min-marker))
+       nil))
     (prog1 (if (< ilog-recent-commands-messages-marker (point-max))
                (buffer-substring ilog-recent-commands-messages-marker (point-max))
              "")
