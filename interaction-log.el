@@ -539,7 +539,8 @@ BEG-OF-LAST-LINE is non-nil."
 						(equal pre-mess "")
 						(ilog-self-insert-command-p
 						 (ilog-log-entry-command ilog-last-inserted-command))))
-				      (insert (propertize (if (looking-back "\\`\\|\n") "" "\n")
+				      (insert (propertize (if (looking-back "\\`\\|\n" (1- (point)))
+                                                              "" "\n")
 							  'invisible 'ilog-command))
 				    (search-backward-regexp "[^[:space:]]")
 				    (forward-char 1)
@@ -553,7 +554,7 @@ BEG-OF-LAST-LINE is non-nil."
 					      'invisible 'ilog-command))
 			      (concat
 			       (ilog-format-messages pre-mess)
-			       (propertize (if (looking-back "\\`\\|\n") "" "\n")
+			       (propertize (if (looking-back "\\`\\|\n" (1- (point))) "" "\n")
 					   'invisible 'ilog-command)
 			       (propertize (concat (if (> mult 1) (format "%s * " mult) "")
 						   (key-description keys))
