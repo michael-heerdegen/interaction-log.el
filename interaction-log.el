@@ -1,4 +1,4 @@
-;;; interaction-log.el --- exhaustive log of interactions with Emacs
+;;; interaction-log.el --- exhaustive log of interactions with Emacs   -*- lexical-binding: t -*-
 
 
 ;; Copyright (C) 2012-2014 Michael Heerdegen
